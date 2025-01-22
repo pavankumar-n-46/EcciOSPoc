@@ -190,4 +190,107 @@ class NetworkManager {
         task.resume()
     }
 
+    func encryptAndSendToServer(_ message: String, completion: @escaping (Bool, String?) -> Void) {
+        guard let encrypted = keyManager.encryptMessageUsingStoredKey(message) else {
+            completion(false, "Encryption failed.")
+            return
+        }
+
+        let ciphertextB64 = encrypted.ciphertext.base64EncodedString()
+        let nonceB64 = encrypted.nonce.withUnsafeBytes { Data($0).base64EncodedString() }
+        let tagB64 = encrypted.tag.base64EncodedString()
+
+        log("Ciphertext (Base64): \(ciphertextB64)")
+        log("Nonce (Base64): \(nonceB64)")
+        log("Tag (Base64): \(tagB64)")
+
+        let url = URL(string: "http://127.0.0.1:5000/decrypt")!  // 🔹 Adjust server URL if needed
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
+            "ciphertext": ciphertextB64,
+            "nonce": nonceB64,
+            "tag": tagB64
+        ]
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            completion(false, "Failed to serialize JSON.")
+            return
+        }
+
+        request.httpBody = jsonData
+
+        let task = URLSession.shared.dataTask(with: request) { (data, response, error) in
+            guard let data = data, error == nil else {
+                completion(false, "Network error: \(error?.localizedDescription ?? "Unknown error")")
+                return
+            }
+
+            do {
+                if let jsonResponse = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+                    if let plaintext = jsonResponse["plaintext"] as? String {
+                        print("✅ Decryption successful: \(plaintext)")
+                        completion(true, plaintext)
+                    } else if let errorMsg = jsonResponse["error"] as? String {
+                        completion(false, "Server error: \(errorMsg)")
+                    }
+                } else {
+                    completion(false, "Invalid server response.")
+                }
+            } catch {
+                completion(false, "JSON decoding error: \(error)")
+            }
+        }
+        task.resume()
+    }
+
+    func encryptDataFromServer(plaintext: String, completion: @escaping (Bool, String?) -> Void) {
+        let url = URL(string: "http://127.0.0.1:5000/encrypt")!  // Adjust server URL if needed
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = ["data": plaintext]
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            completion(false, "Failed to serialize JSON.")
+            return
+        }
+
+        request.httpBody = jsonData
+
+        let task = URLSession.shared.dataTask(with: request) { (data, response, error) in
+            guard let data = data, error == nil else {
+                completion(false, "Network error: \(error?.localizedDescription ?? "Unknown error")")
+                return
+            }
+
+            do {
+                if let jsonResponse = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+                    print("✅ Server Encryption Successful")
+
+                    // Check for errors
+                    if let error = jsonResponse["error"] as? String {
+                        completion(false, error)
+                        return
+                    }
+
+                    // Call the updated decryptMessage method to handle all conversions and decryption
+                    if let decryptedText = self.keyManager.decryptMessage(from: jsonResponse) {
+                        print("✅ Decryption Successful: \(decryptedText)")
+                        completion(true, decryptedText)
+                    } else {
+                        completion(false, "Decryption failed.")
+                    }
+                } else {
+                    completion(false, "Invalid server response.")
+                }
+            } catch {
+                completion(false, "JSON decoding error: \(error)")
+            }
+        }
+        task.resume()
+    }
 }

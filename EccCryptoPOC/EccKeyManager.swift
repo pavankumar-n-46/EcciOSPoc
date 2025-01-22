@@ -100,7 +100,7 @@ class ECCKeyManager {
             let sharedSecret = try privateKey.sharedSecretFromKeyAgreement(with: peerPublicKey)
             return sharedSecret.hkdfDerivedSymmetricKey(using: SHA256.self, salt: Data(), sharedInfo: Data(), outputByteCount: 32)
         } catch {
-            print("Key Agreement failed: \(error)")
+            log("Key Agreement failed: \(error)")
             return nil
         }
     }
@@ -120,9 +120,9 @@ class ECCKeyManager {
         // Save the new shared secret to the Keychain
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecSuccess {
-            print("Shared secret saved successfully.")
+            log("Shared secret saved successfully.")
         } else {
-            print("Error saving shared secret: \(status)")
+            log("Error saving shared secret: \(status)")
         }
     }
 
@@ -141,7 +141,7 @@ class ECCKeyManager {
         if status == errSecSuccess, let secretData = result as? Data {
             return secretData
         } else {
-            print("Error loading shared secret: \(status)")
+            log("Error loading shared secret: \(status)")
             return nil
         }
     }
@@ -181,17 +181,17 @@ class ECCKeyManager {
         do {
             let signature = try privateKey.signature(for: messageData)
 
-            print("Signature (DER): \(signature.derRepresentation.base64EncodedString())\n")
-            print("🔹 Message Data (UTF-8): \(message)")
-            print("🔹 Message Data (Base64): \(messageData.base64EncodedString())")
+            log("Signature (DER): \(signature.derRepresentation.base64EncodedString())\n")
+            log("🔹 Message Data (UTF-8): \(message)")
+            log("🔹 Message Data (Base64): \(messageData.base64EncodedString())")
 
             let signatureDERString = signature.derRepresentation.base64EncodedString()
-            print("🔹 Signature (DER Base64): \(signatureDERString)")
+            log("🔹 Signature (DER Base64): \(signatureDERString)")
 
             return signatureDERString // Ensure DER format is used
 
         } catch {
-            print("❌ Signature Generation Error: \(error)")
+            log("❌ Signature Generation Error: \(error)")
             throw CryptoError.signatureGenerationFailed
         }
     }
@@ -204,12 +204,27 @@ class ECCKeyManager {
             let signatureObject = try P256.Signing.ECDSASignature(derRepresentation: signature)
             return publicKey.isValidSignature(signatureObject, for: messageData)
         } catch {
-            print("Signature verification failed: \(error)")
+            log("Signature verification failed: \(error)")
             return false
         }
     }
     
     // MARK: - AES Encryption / Decryption
+
+    // Function to encrypt using the stored shared secret from Keychain
+    func encryptMessageUsingStoredKey(_ message: String) -> (ciphertext: Data, nonce: AES.GCM.Nonce, tag: Data)? {
+        guard let secretData = loadSharedSecret() else {
+            log("❌ Failed to retrieve shared secret from Keychain.")
+            return nil
+        }
+
+        // Convert secretData (retrieved from Keychain) into a SymmetricKey
+        let symmetricKey = SymmetricKey(data: secretData)
+        log("✅ Loaded symmetric key from Keychain for encryption.")
+
+        // Encrypt using the retrieved key
+        return encryptMessage(message, using: symmetricKey)
+    }
 
     /// Encrypts a message using AES-GCM with the derived symmetric key
     func encryptMessage(_ message: String, using key: SymmetricKey) -> (ciphertext: Data, nonce: AES.GCM.Nonce, tag: Data)? {
@@ -219,19 +234,52 @@ class ECCKeyManager {
             let sealedBox = try AES.GCM.seal(messageData, using: key)
             return (sealedBox.ciphertext, sealedBox.nonce, sealedBox.tag)
         } catch {
-            print("Encryption failed: \(error)")
+            log("Encryption failed: \(error)")
             return nil
         }
     }
 
     /// Decrypts a message using AES-GCM with the derived symmetric key
-    func decryptMessage(_ ciphertext: Data, nonce: AES.GCM.Nonce, tag: Data, using key: SymmetricKey) -> String? {
+    func decryptMessage(from serverResponse: [String: Any]) -> String? {
         do {
-            let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag)
-            let decryptedData = try AES.GCM.open(sealedBox, using: key)
+            // Extract ciphertext, nonce, and tag from the server's response
+            guard let ciphertextB64 = serverResponse["ciphertext"] as? String,
+                  let nonceB64 = serverResponse["nonce"] as? String,
+                  let tagB64 = serverResponse["tag"] as? String else {
+                log("❌ Failed to extract ciphertext, nonce, or tag from response.")
+                return nil
+            }
+
+            // Convert Base64 strings to Data
+            guard let ciphertextData = Data(base64Encoded: ciphertextB64),
+                  let nonceData = Data(base64Encoded: nonceB64),
+                  let tagData = Data(base64Encoded: tagB64) else {
+                log("❌ Failed to decode Base64 data.")
+                return nil
+            }
+
+            // Convert nonce to AES.GCM.Nonce format
+            guard let nonce = try? AES.GCM.Nonce(data: nonceData) else {
+                log("❌ Failed to create nonce.")
+                return nil
+            }
+
+            // Retrieve the symmetric key from Keychain
+            guard let secretData = loadSharedSecret() else {
+                log("❌ Failed to retrieve shared secret from Keychain.")
+                return nil
+            }
+
+            let symmetricKey = SymmetricKey(data: secretData)
+            log("✅ Loaded symmetric key from Keychain for decryption.")
+
+            // Decrypt the message using the symmetric key and the tag
+            let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertextData, tag: tagData)
+            let decryptedData = try AES.GCM.open(sealedBox, using: symmetricKey)
+
             return String(data: decryptedData, encoding: .utf8)
         } catch {
-            print("Decryption failed: \(error)")
+            log("❌ Decryption failed: \(error)")
             return nil
         }
     }

@@ -11,7 +11,7 @@ import CryptoKit
 class ViewController: UIViewController {
 
     private let keyManager = ECCKeyManager()
-    private var peerPublicKey: P256.KeyAgreement.PublicKey?
+   // private var peerPublicKey: P256.KeyAgreement.PublicKey?
     private let label = UILabel()
     private var logTextView: UITextView!
 
@@ -22,10 +22,10 @@ class ViewController: UIViewController {
         log("Generated Public Key: \(publicKey)")
 
 
-        /// Simulate server's key
-        let serverPrivateKey = P256.KeyAgreement.PrivateKey()
-        let serverPublicKey = serverPrivateKey.publicKey
-        setPeerPublicKey(serverPublicKey)
+//        /// Simulate server's key
+//        let serverPrivateKey = P256.KeyAgreement.PrivateKey()
+//        let serverPublicKey = serverPrivateKey.publicKey
+//        setPeerPublicKey(serverPublicKey)
         setupUI()
     }
 
@@ -36,28 +36,38 @@ class ViewController: UIViewController {
         buttonKeyExchange.addTarget(self, action: #selector(exchangePublicKey), for: .touchUpInside)
         buttonKeyExchange.backgroundColor = .blue
         buttonKeyExchange.setTitleColor(.white, for: .normal)
-        buttonKeyExchange.frame = CGRect(x: 10, y: 100, width: 300, height: 40)
+        buttonKeyExchange.frame = CGRect(x: 10, y: 100, width: UIScreen.main.bounds.width - 20, height: 40)
         // make this button non expandeable in stack view
         buttonKeyExchange.setContentHuggingPriority(.required, for: .vertical)
         view.addSubview(buttonKeyExchange)
 
-        let button = UIButton()
-        button.setTitle("Encrypt/Decrypt", for: .normal)
-        button.addTarget(self, action: #selector(demonstrateEncryptionDecryption), for: .touchUpInside)
-        button.backgroundColor = .blue
-        button.setTitleColor(.white, for: .normal)
-        button.frame = CGRect(x: 10, y: 150, width: 200, height: 40)
+        let buttonEncrypt = UIButton()
+        buttonEncrypt.setTitle("Encrypt->Client | Decrypt->Server ", for: .normal)
+        buttonEncrypt.addTarget(self, action: #selector(encryptAndSendToDecrypt), for: .touchUpInside)
+        buttonEncrypt.backgroundColor = .blue
+        buttonEncrypt.setTitleColor(.white, for: .normal)
+        buttonEncrypt.frame = CGRect(x: 10, y: 150, width: UIScreen.main.bounds.width - 20, height: 40)
         // make this button non expandeable in stack view
-        button.setContentHuggingPriority(.required, for: .vertical)
-        view.addSubview(button)
-        
+        buttonEncrypt.setContentHuggingPriority(.required, for: .vertical)
+        view.addSubview(buttonEncrypt)
+
+        let buttonDecrypt = UIButton()
+        buttonDecrypt.setTitle("Encrypt->Server | Decrypt->Client", for: .normal)
+        buttonDecrypt.addTarget(self, action: #selector(encryptedFromServer), for: .touchUpInside)
+        buttonDecrypt.backgroundColor = .blue
+        buttonDecrypt.setTitleColor(.white, for: .normal)
+        buttonDecrypt.frame = CGRect(x: 10, y: 200, width: UIScreen.main.bounds.width - 20, height: 40)
+        // make this button non expandeable in stack view
+        buttonDecrypt.setContentHuggingPriority(.required, for: .vertical)
+        view.addSubview(buttonDecrypt)
+
 
         let buttonSignature = UIButton()
-        buttonSignature.setTitle("Verify Signature", for: .normal)
+        buttonSignature.setTitle("Verify Signature using ECDSA", for: .normal)
         buttonSignature.addTarget(self, action: #selector(verifySignature), for: .touchUpInside)
         buttonSignature.backgroundColor = .blue
         buttonSignature.setTitleColor(.white, for: .normal)
-        buttonSignature.frame = CGRect(x: 10, y: 200, width: 210, height: 40)
+        buttonSignature.frame = CGRect(x: 10, y: 250, width: UIScreen.main.bounds.width - 20, height: 40)
         // make this button non expandeable in stack view
         buttonSignature.setContentHuggingPriority(.required, for: .vertical)
         view.addSubview(buttonSignature)
@@ -85,14 +95,9 @@ class ViewController: UIViewController {
             logTextView.topAnchor.constraint(equalTo: self.view.topAnchor, constant: 300)
         ])
 
-        // Redirect print statements to this UITextView
         redirectLogToTextView()
     }
 
-    /// Simulates setting a peer's public key (e.g., from a server or another device)
-    func setPeerPublicKey(_ publicKey: P256.KeyAgreement.PublicKey) {
-        self.peerPublicKey = publicKey
-    }
 
     @objc func verifySignature() {
         let message = "Device Binding Data"
@@ -118,42 +123,32 @@ class ViewController: UIViewController {
         }
     }
 
-
-    /// Demonstrates encryption and decryption using ECC key exchange and AES-GCM
-    @objc func demonstrateEncryptionDecryption() {
-        guard let peerPublicKey = peerPublicKey else {
-            log("Error: No peer public key set.")
-            return
-        }
-
-        // Derive a shared symmetric key
-        guard let sharedKey = keyManager.deriveSharedSecret(peerPublicKey: peerPublicKey) else {
-            log("Failed to derive shared key.")
-            return
-        }
-        log("Derived Shared Key: \(sharedKey)")
-
-        // Encrypt a message
+    /// Demonstrates encryption from client and decryption from server using ECC key exchange and AES-GCM
+    @objc func encryptAndSendToDecrypt() {
         let message = "Hello, Secure World!"
         log("Original Message: \(message)")
-        guard let encryptedData = keyManager.encryptMessage(message, using: sharedKey) else {
-            log("Encryption failed.")
-            return
-        }
-        log("Encrypted Message: \(encryptedData.ciphertext.base64EncodedString())")
-
-        // Decrypt the message
-        if let decryptedMessage = keyManager.decryptMessage(
-            encryptedData.ciphertext,
-            nonce: encryptedData.nonce,
-            tag: encryptedData.tag,
-            using: sharedKey
-        ) {
-            log("Decrypted Message: \(decryptedMessage)")
-        } else {
-            log("Decryption failed.")
+        NetworkManager().encryptAndSendToServer(message) { value, result in
+            if value {
+                log("Decrypted Message: \(result ?? "error")")
+            } else {
+                log("Decrypted failed.\(result ?? "error")")
+            }
         }
     }
+
+    /// Demonstrates encryption from server and decryption from client using ECC key exchange and AES-GCM
+    @objc func encryptedFromServer() {
+        let message = "Hello, Secure World!"
+        log("Original Message: \(message)")
+        NetworkManager().encryptDataFromServer(plaintext: message) { value, result in
+            if value {
+                log("Decrypted Message: \(result ?? "error")")
+            } else {
+                log("Decrypted failed.\(result ?? "error")")
+            }
+        }
+    }
+
 
     // Function to redirect custom log function to UITextView
     func redirectLogToTextView() {
